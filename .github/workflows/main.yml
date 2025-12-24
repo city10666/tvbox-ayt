@@ -318,7 +318,7 @@ jobs:
             ls -lh dianshi.json
             echo ""
             echo "🔍 配置摘要:"
-            python3 << 'EOF'
+            cat > verify_config.py << 'EOF'
 import json
 try:
     with open('dianshi.json', 'r', encoding='utf-8') as f:
@@ -360,6 +360,7 @@ try:
 except Exception as e:
     print(f'验证错误: {e}')
 EOF
+            python verify_config.py
           else
             echo "❌ 错误: dianshi.json 文件未生成"
             exit 1
