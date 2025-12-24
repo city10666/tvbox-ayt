@@ -318,19 +318,19 @@ jobs:
             ls -lh dianshi.json
             echo ""
             echo "🔍 配置摘要:"
-            python -c "
+            python3 << 'EOF'
 import json
 try:
     with open('dianshi.json', 'r', encoding='utf-8') as f:
         config = json.load(f)
     
     print('1. 同步和自定义检查:')
-    print(f'   - 是否包含优酷站点: {\"drpy_js_优酷\" in [s.get(\"key\", \"\") for s in config.get(\"sites\", [])]}')
-    print(f'   - 是否包含腾讯站点: {\"drpy_js_腾云驾雾\" in [s.get(\"key\", \"\") for s in config.get(\"sites\", [])]}')
-    print(f'   - 是否包含爱奇艺站点: {\"drpy_js_奇珍异兽\" in [s.get(\"key\", \"\") for s in config.get(\"sites\", [])]}')
-    print(f'   - 解析接口数量: {len(config.get(\"parses\", []))}')
+    print(f'   - 是否包含优酷站点: {"drpy_js_优酷" in [s.get("key", "") for s in config.get("sites", [])]}')
+    print(f'   - 是否包含腾讯站点: {"drpy_js_腾云驾雾" in [s.get("key", "") for s in config.get("sites", [])]}')
+    print(f'   - 是否包含爱奇艺站点: {"drpy_js_奇珍异兽" in [s.get("key", "") for s in config.get("sites", [])]}')
+    print(f'   - 解析接口数量: {len(config.get("parses", []))}')
     
-    print('\\n2. 路径转换验证:')
+    print('\n2. 路径转换验证:')
     sites = config.get('sites', [])
     if sites:
         sample_site = sites[0]
@@ -342,14 +342,14 @@ try:
             else:
                 print(f'   ⚠️ API路径可能未转换: {api_path[:100]}...')
     
-    print('\\n3. 配置完整性:')
+    print('\n3. 配置完整性:')
     required_keys = ['sites', 'parses', 'flags', 'rules', 'ads', 'doh']
     for key in required_keys:
         has_key = key in config
         count = len(config.get(key, [])) if has_key else 0
         print(f'   - {key}: {has_key} ({count} 项)')
     
-    print('\\n4. 站点排序检查:')
+    print('\n4. 站点排序检查:')
     if sites:
         print(f'   前6个站点的key:')
         for i in range(min(6, len(sites))):
@@ -359,7 +359,7 @@ try:
         
 except Exception as e:
     print(f'验证错误: {e}')
-"
+EOF
           else
             echo "❌ 错误: dianshi.json 文件未生成"
             exit 1
@@ -373,11 +373,11 @@ except Exception as e:
             echo "没有更改，跳过提交"
           else
             git commit -m "同步上游仓库并应用自定义配置 [$(date +'%Y-%m-%d %H:%M:%S')]
-            
-            - 同步上游 qist/tvbox 仓库
-            - 应用自定义配置（优酷、腾讯等6个国内平台）
-            - 使用第三方解析接口
-            - 转换路径到用户仓库"
+
+- 同步上游 qist/tvbox 仓库
+- 应用自定义配置（优酷、腾讯等6个国内平台）
+- 使用第三方解析接口
+- 转换路径到用户仓库"
             git push origin main
             echo "✅ 已成功推送到 main 分支"
           fi
