@@ -1,0 +1,408 @@
+name: Sync Upstream and Process Configuration
+
+on:
+  schedule:
+    # 每天 UTC 时间 0 点运行（北京时间 8 点）
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  sync-and-process:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 需要写入仓库内容
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0  # 获取所有历史记录
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/qist/tvbox.git
+          git fetch upstream
+
+      - name: Merge upstream changes
+        run: |
+          # 尝试合并上游的main分支
+          git checkout main
+          git merge upstream/main --allow-unrelated-histories --no-edit || true
+          
+          # 如果有冲突，使用上游的版本
+          if git status --porcelain | grep -q "^UU"; then
+            echo "检测到冲突，使用上游版本..."
+            git checkout --theirs -- .
+            git add .
+            git commit -m "解决冲突：使用上游版本 [$(date +'%Y-%m-%d %H:%M:%S')]" || true
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Process configuration with custom settings
+        run: |
+          cat > process_with_custom.py << 'EOF'
+          #!/usr/bin/env python3
+          """
+          处理配置并应用自定义设置：
+          1. 读取上游的dianshi.json
+          2. 应用用户的自定义配置（国内平台+第三方解析）
+          3. 转换路径到用户仓库
+          4. 生成最终的dianshi.json
+          """
+          import json
+          import sys
+          import os
+          from urllib.parse import urljoin
+
+          # 用户的核心配置（关键部分）
+          USER_CORE_CONFIG = {
+              "sites": [
+                  # 6个关键站点 - 国内平台JS驱动
+                  {
+                      "key": "drpy_js_优酷",
+                      "name": "官源 | 优酷[js]",
+                      "type": 3,
+                      "api": "./lib/drpy2.min.js",
+                      "ext": "./js/优酷.js"
+                  },
+                  {
+                      "key": "drpy_js_腾云驾雾",
+                      "name": "官源 | 腾讯[js]",
+                      "type": 3,
+                      "api": "./lib/drpy2.min.js",
+                      "ext": "./js/腾云驾雾.js"
+                  },
+                  {
+                      "key": "drpy_js_百忙无果",
+                      "name": "官源 | 芒果[js]",
+                      "type": 3,
+                      "api": "./lib/drpy2.min.js",
+                      "ext": "./js/百忙无果.js"
+                  },
+                  {
+                      "key": "drpy_js_菜狗",
+                      "name": "官源 | 搜狗[js]",
+                      "type": 3,
+                      "api": "./lib/drpy2.min.js",
+                      "ext": "./js/菜狗.js"
+                  },
+                  {
+                      "key": "drpy_js_360影视",
+                      "name": "官源 | 360[js]",
+                      "type": 3,
+                      "api": "./lib/drpy2.min.js",
+                      "ext": "./js/360影视.js"
+                  },
+                  {
+                      "key": "drpy_js_奇珍异兽",
+                      "name": "官源 | 爱奇艺[js]",
+                      "type": 3,
+                      "api": "./lib/drpy2.min.js",
+                      "ext": "./js/奇珍异兽.js"
+                  }
+              ],
+              "parses": [
+                  # 核心解析接口 - 确保使用第三方解析
+                  {"name": "Json聚合", "type": 3, "url": "Demo"},
+                  {"name": "jx", "type": 0, "url": "https://jx.m3u8.tv/jx/jx.php?url="},
+                  {"name": "羽路均沾", "type": 0, "url": "https://ylu.cc/index.php?url="},
+                  {"name": "999", "type": 0, "url": "https://huayong.net/999/?v="},
+                  {"name": "jx5", "type": 0, "url": "https://huayong.net/jx5/?url="},
+                  {"name": "无尽", "type": 0, "url": "https://jx.wujinkk.com/dplayer/?url=", "ext": {"header": {"User-Agent": "Mozilla/5.0"}}},
+                  {"name": "yemu", "type": 0, "url": "https://www.yemu.xyz/?url="},
+                  {"name": "解析1", "type": 0, "url": "https://bd.jx.cn/?url="},
+                  {"name": "解析2", "type": 0, "url": "https://jx.m3u8.tv/jiexi/?url="},
+                  {"name": "解析3", "type": 0, "url": "https://player.mrgaocloud.com/player/?url="},
+                  {"name": "vip4", "type": 0, "url": "https://huayong.net/vip4/?url="},
+                  {"name": "免费分享", "type": 0, "url": "https://jx.xmflv.com/?url=", "ext": {"flag": ["qq", "腾讯", "qiyi", "爱奇艺", "奇艺", "youku", "优酷", "mgtv", "芒果", "imgo", "letv", "乐视", "pptv", "PPTV", "sohu", "bilibili", "哔哩哔哩", "哔哩"], "header": {"User-Agent": "okhttp/4.1.0"}}},
+                  {"name": "全民", "url": "http://api.wpsseo.cn/?v=", "type": 0, "ext": {"flag": ["qiyi", "imgo", "爱奇艺", "奇艺", "qq", "腾讯", "youku", "优酷", "pptv", "PPTV", "letv", "乐视", "leshi", "bilibili", "哔哩哔哩", "哔哩", "mgtv", "芒果", "sohu", "xigua", "fun", "风行"], "header": {"User-Agent": "Mozilla/5.0"}}}
+              ],
+              "flags": ["youku", "优酷", "优 酷", "优酷视频", "qq", "腾讯", "腾 讯", "腾讯视频", "iqiyi", "qiyi", "奇艺", "爱奇艺", "爱 奇 艺", "m1905", "xigua", "letv", "leshi", "乐视", "乐 视", "sohu", "搜狐", "搜 狐", "搜狐视频", "tudou", "mgtv", "芒果", "imgo", "芒果TV", "芒 果 T V", "bilibili", "哔 哩", "哔 哩 哔 哩", "SPA", "YuMi-vip", "pptv", "PPTV", "ltnb", "rx", "SLYS4k", "tucheng", "BYGA", "luanzi", "dxzy", "QEYSS", "aliyun", "AliS", "122", "chuangying", "CL4K", "xfyun", "wuduzy", "wasu", "renrenmi", "ppayun", "haiwaikan", "cool", "dbm3u8", "xmm", "funshion", "ruyi1080", "ruyib1080"]
+          }
+
+          def load_config(file_path):
+              """从文件加载配置"""
+              with open(file_path, 'r', encoding='utf-8') as f:
+                  return json.load(f)
+          
+          def save_config(config, file_path):
+              """保存配置到文件"""
+              with open(file_path, 'w', encoding='utf-8', newline='\n') as f:
+                  json.dump(config, f, ensure_ascii=False, indent=2)
+          
+          def merge_configs(upstream_config, user_core):
+              """合并上游配置和用户核心配置"""
+              merged = upstream_config.copy()
+              
+              # 确保关键站点在前面
+              if 'sites' in upstream_config and 'sites' in user_core:
+                  # 获取用户的核心站点
+                  core_sites = user_core['sites']
+                  core_keys = [site['key'] for site in core_sites if 'key' in site]
+                  
+                  # 从上游配置中移除重复的核心站点
+                  upstream_sites = []
+                  for site in upstream_config['sites']:
+                      if 'key' in site and site['key'] in core_keys:
+                          continue  # 跳过，用用户的版本替换
+                      upstream_sites.append(site)
+                  
+                  # 合并：用户核心站点在前，然后是其他站点
+                  merged['sites'] = core_sites + upstream_sites
+              
+              # 合并解析接口（确保用户的核心解析接口在前面）
+              if 'parses' in user_core:
+                  user_parses = user_core['parses']
+                  if 'parses' in upstream_config:
+                      # 去重合并
+                      existing_urls = {p.get('url', '') for p in user_parses}
+                      additional_parses = []
+                      for parse in upstream_config['parses']:
+                          if parse.get('url', '') not in existing_urls:
+                              additional_parses.append(parse)
+                      merged['parses'] = user_parses + additional_parses
+                  else:
+                      merged['parses'] = user_parses
+              
+              # 合并flags
+              if 'flags' in user_core and 'flags' in upstream_config:
+                  merged['flags'] = list(set(user_core['flags'] + upstream_config['flags']))
+              
+              return merged
+          
+          def convert_paths_for_user_repo(config, user_repo="city10666/tvbox-ayt"):
+              """转换路径到用户仓库"""
+              def is_url(s: str) -> bool:
+                  return isinstance(s, str) and s.startswith(('http://', 'https://', 'ftp://', '//'))
+              
+              def convert_path(path: str) -> str:
+                  if not isinstance(path, str):
+                      return path
+                  if is_url(path):
+                      # 如果已经是完整URL，检查是否是上游仓库的URL
+                      if 'raw.githubusercontent.com/qist/tvbox' in path:
+                          # 替换为用户的仓库
+                          return path.replace('qist/tvbox', user_repo)
+                      return path
+                  if path.startswith('./'):
+                      path = path[2:]
+                  # 转换为用户仓库的URL
+                  base_url = f"https://raw.githubusercontent.com/{user_repo}/main/"
+                  if ';' in path:
+                      parts = path.split(';')
+                      converted = urljoin(base_url, parts[0])
+                      return ';'.join([converted] + parts[1:])
+                  else:
+                      return urljoin(base_url, path)
+              
+              def transform_obj(obj):
+                  if isinstance(obj, dict):
+                      for key, val in obj.items():
+                          # 跳过某些字段
+                          if key in ['ua', 'User-Agent']:
+                              continue
+                          obj[key] = transform_obj(val)
+                      return obj
+                  elif isinstance(obj, list):
+                      return [transform_obj(item) for item in obj]
+                  elif isinstance(obj, str):
+                      if obj.startswith('./'):
+                          return convert_path(obj)
+                      # 检查是否包含上游仓库的URL
+                      if 'raw.githubusercontent.com/qist/tvbox' in obj:
+                          return obj.replace('qist/tvbox', user_repo)
+                      return obj
+                  else:
+                      return obj
+              
+              return transform_obj(config)
+          
+          def main():
+              # 输入文件（上游的dianshi.json）
+              input_file = "dianshi.json"
+              output_file = "dianshi_processed.json"
+              
+              if not os.path.exists(input_file):
+                  print(f"错误: 输入文件 {input_file} 不存在")
+                  sys.exit(1)
+              
+              # 加载上游配置
+              print(f"从 {input_file} 加载上游配置...")
+              upstream_config = load_config(input_file)
+              
+              # 合并配置
+              print("应用用户自定义配置...")
+              merged_config = merge_configs(upstream_config, USER_CORE_CONFIG)
+              
+              # 转换路径到用户仓库
+              print("转换路径到用户仓库...")
+              final_config = convert_paths_for_user_repo(merged_config)
+              
+              # 保存最终配置
+              save_config(final_config, output_file)
+              
+              # 输出统计信息
+              print(f"\n✅ 配置处理完成，输出到 {output_file}")
+              print(f"📊 最终配置统计:")
+              print(f"  站点总数: {len(final_config.get('sites', []))}")
+              print(f"  解析接口总数: {len(final_config.get('parses', []))}")
+              print(f"  规则数量: {len(final_config.get('rules', []))}")
+              print(f"  广告过滤数量: {len(final_config.get('ads', []))}")
+              
+              # 显示关键站点
+              sites = final_config.get('sites', [])
+              if sites:
+                  print(f"\n🔑 关键站点（前6个）:")
+                  for i in range(min(6, len(sites))):
+                      site = sites[i]
+                      key = site.get('key', '无key')
+                      name = site.get('name', '无name')
+                      api = site.get('api', '无api')
+                      print(f"  {i+1}. {key} - {name}")
+                      print(f"      API路径: {api[:80]}...")
+              
+              # 显示解析接口
+              parses = final_config.get('parses', [])
+              if parses:
+                  print(f"\n🔧 解析接口（前5个）:")
+                  for i in range(min(5, len(parses))):
+                      parse = parses[i]
+                      parse_name = parse.get('name', '无名')
+                      parse_url = parse.get('url', '无url')
+                      print(f"  {i+1}. {parse_name} - {parse_url[:50]}...")
+              
+              # 检查路径转换
+              print(f"\n🔗 路径转换检查:")
+              if sites:
+                  sample_site = sites[0]
+                  if 'api' in sample_site:
+                      api_path = sample_site['api']
+                      if 'city10666/tvbox-ayt' in api_path:
+                          print(f"  ✅ API路径已正确转换到用户仓库")
+                      else:
+                          print(f"  ⚠️ API路径可能未转换: {api_path[:80]}...")
+          
+          if __name__ == '__main__':
+              main()
+          EOF
+
+          # 运行处理脚本
+          python process_with_custom.py
+
+      - name: Replace original dianshi.json with processed version
+        run: |
+          echo "替换原始dianshi.json为处理后的版本..."
+          if [ -f dianshi_processed.json ]; then
+            mv dianshi_processed.json dianshi.json
+            echo "✅ 已替换dianshi.json"
+          else
+            echo "❌ 错误: dianshi_processed.json 文件未生成"
+            exit 1
+          fi
+
+      - name: Verify the final configuration
+        run: |
+          echo "验证最终配置文件..."
+          if [ -f dianshi.json ]; then
+            echo "✅ dianshi.json 生成成功"
+            echo "📋 文件信息:"
+            ls -lh dianshi.json
+            echo ""
+            echo "🔍 配置摘要:"
+            python -c "
+import json
+try:
+    with open('dianshi.json', 'r', encoding='utf-8') as f:
+        config = json.load(f)
+    
+    print('1. 同步和自定义检查:')
+    print(f'   - 是否包含优酷站点: {\"drpy_js_优酷\" in [s.get(\"key\", \"\") for s in config.get(\"sites\", [])]}')
+    print(f'   - 是否包含腾讯站点: {\"drpy_js_腾云驾雾\" in [s.get(\"key\", \"\") for s in config.get(\"sites\", [])]}')
+    print(f'   - 是否包含爱奇艺站点: {\"drpy_js_奇珍异兽\" in [s.get(\"key\", \"\") for s in config.get(\"sites\", [])]}')
+    print(f'   - 解析接口数量: {len(config.get(\"parses\", []))}')
+    
+    print('\\n2. 路径转换验证:')
+    sites = config.get('sites', [])
+    if sites:
+        sample_site = sites[0]
+        if 'api' in sample_site:
+            api_path = sample_site['api']
+            if 'city10666/tvbox-ayt' in api_path:
+                print(f'   ✅ API路径已正确转换到用户仓库')
+                print(f'      示例: {api_path[:100]}...')
+            else:
+                print(f'   ⚠️ API路径可能未转换: {api_path[:100]}...')
+    
+    print('\\n3. 配置完整性:')
+    required_keys = ['sites', 'parses', 'flags', 'rules', 'ads', 'doh']
+    for key in required_keys:
+        has_key = key in config
+        count = len(config.get(key, [])) if has_key else 0
+        print(f'   - {key}: {has_key} ({count} 项)')
+    
+    print('\\n4. 站点排序检查:')
+    if sites:
+        print(f'   前6个站点的key:')
+        for i in range(min(6, len(sites))):
+            key = sites[i].get('key', '无key')
+            name = sites[i].get('name', '无name')
+            print(f'     {i+1}. {key} - {name[:30]}...')
+        
+except Exception as e:
+    print(f'验证错误: {e}')
+"
+          else
+            echo "❌ 错误: dianshi.json 文件未生成"
+            exit 1
+          fi
+
+      - name: Commit and push all changes
+        run: |
+          echo "提交所有更改..."
+          git add .
+          if git diff --cached --quiet; then
+            echo "没有更改，跳过提交"
+          else
+            git commit -m "同步上游仓库并应用自定义配置 [$(date +'%Y-%m-%d %H:%M:%S')]
+            
+            - 同步上游 qist/tvbox 仓库
+            - 应用自定义配置（优酷、腾讯等6个国内平台）
+            - 使用第三方解析接口
+            - 转换路径到用户仓库"
+            git push origin main
+            echo "✅ 已成功推送到 main 分支"
+          fi
+
+      - name: Create summary report
+        run: |
+          echo "📊 同步和处理完成报告" > sync_report.md
+          echo "======================" >> sync_report.md
+          echo "" >> sync_report.md
+          echo "**完成时间:** $(date)" >> sync_report.md
+          echo "" >> sync_report.md
+          echo "**同步来源:** https://github.com/qist/tvbox" >> sync_report.md
+          echo "**目标仓库:** https://github.com/city10666/tvbox-ayt" >> sync_report.md
+          echo "" >> sync_report.md
+          echo "**应用的自定义配置:**" >> sync_report.md
+          echo "1. 6个国内平台站点优先显示" >> sync_report.md
+          echo "2. 第三方解析接口保障" >> sync_report.md
+          echo "3. 路径转换到用户仓库" >> sync_report.md
+          echo "" >> sync_report.md
+          echo "**生成的文件:**" >> sync_report.md
+          echo "- dianshi.json (处理后的完整配置)" >> sync_report.md
+          echo "" >> sync_report.md
+          echo "**使用说明:**" >> sync_report.md
+          echo "1. 在TVBox应用中配置仓库地址: https://raw.githubusercontent.com/city10666/tvbox-ayt/main/" >> sync_report.md
+          echo "2. 加载 dianshi.json 配置文件" >> sync_report.md
+          echo "3. 享受国内平台内容和第三方解析" >> sync_report.md
+          
+          cat sync_report.md
