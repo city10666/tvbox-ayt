@@ -1,0 +1,40 @@
+name: Sync upstream tvbox
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # 每 6 小时同步一次
+  workflow_dispatch:       # 手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add upstream repo
+        run: |
+          git remote add upstream https://github.com/qist/tvbox.git || true
+
+      - name: Fetch upstream
+        run: git fetch upstream
+
+      - name: Detect upstream branch
+        id: detect
+        run: |
+          if git show-ref --verify --quiet refs/remotes/upstream/main; then
+            echo "branch=main" >> $GITHUB_OUTPUT
+          else
+            echo "branch=master" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Merge upstream safely
+        run: |
+          git checkout main
+          git merge upstream/${{ steps.detect.outputs.branch }} --no-edit
+
+      - name: Push to origin
+        run: git push origin main
